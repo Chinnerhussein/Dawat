@@ -1,0 +1,144 @@
+rules_version = '2';
+
+// Dawat Firestore security rules (report §9.1): authenticated access,
+// role-based authorization, and owners-only access to planning data.
+// Deploy with: firebase deploy --only firestore:rules
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function me() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function active() {
+      return signedIn() && me().isActive == true;
+    }
+
+    function hasRole(role) {
+      return active() && me().role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function owns(data) {
+      return signedIn() && data.userId == request.auth.uid;
+    }
+
+    function unchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function approvalNotRequired() {
+      return exists(/databases/$(database)/documents/settings/system)
+        && get(/databases/$(database)/documents/settings/system).data.requireProviderApproval == false;
+    }
+
+    // USERS: own profile; provider profiles are public business pages.
+    match /users/{uid} {
+      allow read: if (signedIn() && request.auth.uid == uid)
+        || isAdmin()
+        || (signedIn() && resource.data.role == 'provider');
+
+      // Couples and providers sign up themselves. Admin accounts are created
+      // by another admin or in the Firebase console.
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.role in ['couple', 'provider']
+        && request.resource.data.isActive == true
+        && (request.resource.data.role == 'couple'
+            || request.resource.data.approval == 'pending'
+            || approvalNotRequired());
+
+      // Users edit their own details but not their role, status or rating.
+      allow update: if isAdmin()
+        || (active() && request.auth.uid == uid
+            && unchanged(['role', 'isActive', 'approval', 'rating', 'ratingCount', 'email']));
+
+      allow delete: if isAdmin();
+    }
+
+    // SERVICES: readable by any signed-in user; managed by their provider.
+    match /services/{id} {
+      allow read: if signedIn();
+      allow create: if hasRole('provider') && request.resource.data.providerId == request.auth.uid;
+      allow update: if isAdmin()
+        || (hasRole('provider')
+            && resource.data.providerId == request.auth.uid
+            && request.resource.data.providerId == request.auth.uid);
+      allow delete: if isAdmin() || (hasRole('provider') && resource.data.providerId == request.auth.uid);
+    }
+
+    // BOOKINGS: visible to the couple, the provider and admins.
+    match /bookings/{id} {
+      allow read: if isAdmin()
+        || (signedIn() && (resource.data.coupleId == request.auth.uid
+                           || resource.data.providerId == request.auth.uid));
+
+      // Couples create requests: always pending and unpaid.
+      allow create: if hasRole('couple')
+        && request.resource.data.coupleId == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.amountPaid == 0
+        && request.resource.data.paymentStatus == 'unpaid';
+
+      allow update: if isAdmin()
+        // Provider answers a request or completes a booking; cannot touch money.
+        || (hasRole('provider')
+            && resource.data.providerId == request.auth.uid
+            && unchanged(['coupleId', 'providerId', 'serviceId', 'amount', 'amountPaid', 'paymentStatus', 'eventDate'])
+            && ((resource.data.status == 'pending' && request.resource.data.status in ['accepted', 'declined'])
+                || (resource.data.status == 'accepted' && request.resource.data.status == 'completed')))
+        // Couple pays (status unchanged) or cancels an open booking.
+        || (hasRole('couple')
+            && resource.data.coupleId == request.auth.uid
+            && unchanged(['coupleId', 'providerId', 'serviceId', 'amount', 'eventDate'])
+            && resource.data.status in ['pending', 'accepted']
+            && (request.resource.data.status == resource.data.status
+                || request.resource.data.status == 'cancelled')
+            && request.resource.data.amountPaid >= resource.data.amountPaid
+            && request.resource.data.amountPaid <= resource.data.amount);
+
+      allow delete: if isAdmin();
+    }
+
+    // Couple planning data: owner only.
+    match /wishlists/{id} {
+      allow read, delete: if owns(resource.data);
+      allow create, update: if owns(request.resource.data);
+    }
+    match /guests/{id} {
+      allow read, delete: if owns(resource.data);
+      allow create, update: if owns(request.resource.data);
+    }
+    match /budget_expenses/{id} {
+      allow read, delete: if owns(resource.data);
+      allow create, update: if owns(request.resource.data);
+    }
+    match /tasks/{id} {
+      allow read, delete: if owns(resource.data);
+      allow create, update: if owns(request.resource.data);
+    }
+
+    // NOTIFICATIONS: the recipient reads them and marks them read. The app
+    // writes them from the client for now; move this to Cloud Functions
+    // (together with push sending) before launch.
+    match /notifications/{id} {
+      allow read: if owns(resource.data);
+      allow create: if active();
+      allow update: if owns(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if owns(resource.data) || isAdmin();
+    }
+
+    // SYSTEM SETTINGS: public read (the sign-up screen needs them), admin write.
+    match /settings/{doc} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}
