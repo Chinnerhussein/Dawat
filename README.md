@@ -9,6 +9,8 @@ admins look after users, providers and system settings.
 American University of Kurdistan, Computer Science & IT.
 Chiner · Zhyar · Ravin. Supervisor: Dr. Hasan Mohammed.
 
+![Dawat screens: welcome, couple home, vendors, service detail, bookings, budget, provider dashboard, admin overview](docs/screens.png)
+
 ## Run it
 
 You need Flutter 3.47 or newer (built and tested with 3.50.1).
