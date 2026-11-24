@@ -9,6 +9,7 @@ admins look after users, providers and system settings.
 American University of Kurdistan, Computer Science & IT.
 Chiner · Zhyar · Ravin. Supervisor: Dr. Hasan Mohammed.
 
+Maintained by Chiner Hussein.
 ![Dawat screens: welcome, couple home, vendors, service detail, bookings, budget, provider dashboard, admin overview](docs/screens.png)
 
 ## Run it
